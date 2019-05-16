@@ -104,7 +104,7 @@ export function extensionRelative(filepath: string) {
 }
 
 export function workspaceRelative(filepath: string) {
-  return path.join(vscode.workspace.rootPath, filepath);
+  return getContext().asAbsolutePath(filepath);
 }
 
 export async function getTargetName(t: Target) {
@@ -157,4 +157,13 @@ export function arrayIncludes<T>(array: T[], value: T) {
 
 export function isThenable<T>(x: vscode.ProviderResult<T>): x is Thenable<T> {
   return arrayIncludes(Object.getOwnPropertyNames(x), "then");
+}
+
+let _context: vscode.ExtensionContext;
+export function saveContext(ctx: vscode.ExtensionContext) {
+  _context = ctx;
+}
+
+export function getContext() {
+  return _context;
 }

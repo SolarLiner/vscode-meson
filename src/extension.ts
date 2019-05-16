@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as vscode from "vscode";
+import * as vscodeLSP from "vscode-languageclient";
 import {
   runMesonConfigure,
   runMesonBuild,
@@ -13,7 +14,9 @@ import {
   execAsTask,
   workspaceRelative,
   extensionConfigurationSet,
-  getTargetName
+  getTargetName,
+  getOutputChannel,
+  saveContext
 } from "./utils";
 import {
   getMesonTargets,
@@ -22,13 +25,53 @@ import {
 } from "./meson/introspection";
 
 let explorer: MesonProjectExplorer;
+let client: vscodeLSP.LanguageClient;
 
 export function activate(ctx: vscode.ExtensionContext): void {
+  saveContext(ctx);
   const root = vscode.workspace.rootPath;
   const buildDir = workspaceRelative(extensionConfiguration("buildFolder"));
   if (!root) return;
 
   explorer = new MesonProjectExplorer(ctx, buildDir);
+  const lspServerOptions: vscodeLSP.ServerOptions = {
+    run: {
+      command: extensionConfiguration("mesonPath"),
+      args: ["lsp"],
+      transport: vscodeLSP.TransportKind.stdio
+    },
+    debug: {
+      command: extensionConfiguration("mesonPath"),
+      args: ["lsp", "--debug"],
+      transport: vscodeLSP.TransportKind.stdio
+    }
+  };
+  const lspClientOptions: vscodeLSP.LanguageClientOptions = {
+    documentSelector: [{ language: "meson", scheme: "file" }],
+    synchronize: {
+      fileEvents: [vscode.workspace.createFileSystemWatcher("**/meson.build")]
+    },
+    errorHandler: {
+      error(error, message, count) {
+        getOutputChannel().appendLine(
+          `[LSP ERROR ${error}]: ${message} (x${count})`
+        );
+        // getOutputChannel().show(true);
+        return vscodeLSP.ErrorAction.Continue;
+      },
+      closed() {
+        getOutputChannel().appendLine("[LSP INFO] Server closed.");
+        return vscodeLSP.CloseAction.DoNotRestart;
+      }
+    }
+  };
+  client = new vscodeLSP.LanguageClient(
+    "Meson Language Server",
+    lspServerOptions,
+    lspClientOptions,
+    true
+  );
+  client.trace = vscodeLSP.Trace.Verbose;
 
   ctx.subscriptions.push(
     vscode.tasks.registerTaskProvider("meson", {
@@ -222,4 +265,10 @@ export function activate(ctx: vscode.ExtensionContext): void {
         }
       });
   }
+  client.start();
+}
+
+export function deactivate() {
+  if (!client) return;
+  client.stop();
 }
