@@ -2,40 +2,39 @@ import * as path from "path";
 import * as vscode from "vscode";
 import {
   runMesonConfigure,
-  runMesonBuild,
   runMesonTests,
   runMesonReconfigure
 } from "./meson/runners";
-import { getMesonTasks } from "./tasks";
 import { MesonProjectExplorer } from "./treeview";
 import {
   extensionConfiguration,
-  execAsTask,
   workspaceRelative,
   extensionConfigurationSet,
-  getTargetName
+  arrayIncludes
 } from "./utils";
-import {
-  getMesonTargets,
-  getMesonTests,
-  getMesonBenchmarks
-} from "./meson/introspection";
+import MesonBuildDir from "./meson/BuildDir";
+import MesonBuildTarget from "./meson/BuildTarget";
+import { runNinja } from "./meson/utils";
 
 let explorer: MesonProjectExplorer;
 
 export function activate(ctx: vscode.ExtensionContext): void {
   const root = vscode.workspace.rootPath;
-  const buildDir = workspaceRelative(extensionConfiguration("buildFolder"));
+  const builder = new MesonBuildDir(root, workspaceRelative(extensionConfiguration("buildFolder")));
   if (!root) return;
 
-  explorer = new MesonProjectExplorer(ctx, buildDir);
+  explorer = new MesonProjectExplorer(ctx, builder.buildDir);
 
   ctx.subscriptions.push(
     vscode.tasks.registerTaskProvider("meson", {
-      provideTasks(token) {
-        return getMesonTasks(
-          workspaceRelative(extensionConfiguration("buildFolder"))
-        );
+      async provideTasks() {
+        const [tgts, tests, benches] = await Promise.all([builder.getTargets(), builder.getTests(), builder.getBenchmarks()]);
+        return [
+          ...tgts.map(t => t.getBuildTask()),
+          ...tgts.map(t => t.getRunTask()),
+          ...tests.map(t => t.getRunTask()),
+          ...benches.map(t => t.getRunTask())
+        ]
       },
       resolveTask() {
         return undefined;
@@ -45,16 +44,13 @@ export function activate(ctx: vscode.ExtensionContext): void {
 
   ctx.subscriptions.push(
     vscode.commands.registerCommand("mesonbuild.configure", async () => {
-      await runMesonConfigure(
-        root,
-        workspaceRelative(extensionConfiguration("buildFolder"))
-      );
+      await builder.configure();
       explorer.refresh();
     })
   );
   ctx.subscriptions.push(
     vscode.commands.registerCommand("mesonbuild.reconfigure", async () => {
-      await runMesonReconfigure();
+      await builder.reconfigure();
       explorer.refresh();
     })
   );
@@ -62,13 +58,11 @@ export function activate(ctx: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "mesonbuild.build",
       async (name?: string) => {
-        const resolvedName = await new Promise<string>((resolve, reject) => {
+        const resolvedTarget = await new Promise<MesonBuildTarget>((resolve, reject) => {
           if (name) {
-            return resolve(name);
+            return resolve(MesonBuildTarget.fromTargetName(builder, name));
           }
-          const itemsP: Promise<vscode.QuickPickItem[]> = getMesonTargets(
-            buildDir
-          ).then<vscode.QuickPickItem[]>(tt => [
+          const itemsP: Promise<vscode.QuickPickItem[]> = builder.getTargets().then<vscode.QuickPickItem[]>(tt => [
             {
               label: "all",
               detail: "Build all targets",
@@ -77,7 +71,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
             },
             ...tt.map<vscode.QuickPickItem>(t => ({
               label: t.name,
-              detail: path.relative(root, path.dirname(t.defined_in)),
+              detail: path.relative(root, path.dirname(t.target.defined_in)),
               description: t.type,
               picked: false
             }))
@@ -94,23 +88,16 @@ export function activate(ctx: vscode.ExtensionContext): void {
               const active = picker.activeItems[0];
               if (active.label === "all") resolve(undefined);
               else
-                resolve(
-                  getTargetName(
-                    (await getMesonTargets(buildDir)).filter(
-                      t => t.name === active.label
-                    )[0]
-                  )
-                );
+                resolve(MesonBuildTarget.fromTargetName(builder, active.label));
               picker.dispose();
             });
             picker.onDidHide(() => reject());
           });
         }).catch<null>(() => null);
-        if (resolvedName !== null)
-          await runMesonBuild(
-            workspaceRelative(extensionConfiguration("buildFolder")),
-            resolvedName
-          );
+        if (resolvedTarget !== null)
+          if (resolvedTarget === undefined) await builder.build();
+          else resolvedTarget.build();
+        await resolvedTarget.build();
         explorer.refresh();
       }
     )
@@ -130,8 +117,8 @@ export function activate(ctx: vscode.ExtensionContext): void {
             picker.dispose();
           });
           picker.onDidHide(() => reject());
-          Promise.all([getMesonTests(buildDir), getMesonBenchmarks(buildDir)])
-            .then<vscode.QuickPickItem[]>(([tests, benchmarks]) => [
+          Promise.all([builder.getBenchmarks(), builder.getTests()])
+            .then<vscode.QuickPickItem[]>(([benchmarks, tests]) => [
               {
                 label: "all",
                 detail: "Run all tests",
@@ -140,18 +127,18 @@ export function activate(ctx: vscode.ExtensionContext): void {
               },
               ...tests.map<vscode.QuickPickItem>(t => ({
                 label: t.name,
-                detail: `Test timeout: ${t.timeout}s, ${
-                  t.is_parallel ? "Run in parallel" : "Run serially"
-                }`,
-                description: t.suite.join(","),
+                detail: `Test timeout: ${t.test.timeout}s, ${
+                  t.test.is_parallel ? "Run in parallel" : "Run serially"
+                  }`,
+                description: t.test.suite.join(","),
                 picked: false
               })),
               ...benchmarks.map<vscode.QuickPickItem>(b => ({
                 label: b.name,
                 detail: `Benchmark timeout: ${
-                  b.timeout
-                }s, benchmarks always run serially`,
-                description: b.suite.join(","),
+                  b.test.timeout
+                  }s, benchmarks always run serially`,
+                description: b.test.suite.join(","),
                 picked: false
               }))
             ])
@@ -162,33 +149,29 @@ export function activate(ctx: vscode.ExtensionContext): void {
           picker.show();
         }).catch<null>(() => null);
         if (resolvedName != null)
-          await runMesonTests(
-            workspaceRelative(extensionConfiguration("buildFolder")),
-            resolvedName
-          );
+          await builder.test(resolvedName === "all" ? "" : resolvedName);
         explorer.refresh();
       }
     )
   );
   ctx.subscriptions.push(
     vscode.commands.registerCommand("mesonbuild.clean", async () => {
-      await execAsTask("ninja clean", {
-        cwd: workspaceRelative(extensionConfiguration("buildFolder"))
-      });
+      await runNinja(["clean"], { cwd: builder.buildDir });
     })
   );
 
   if (extensionConfiguration("configureOnOpen"))
     vscode.commands
-      .executeCommand<boolean>("mesonbuild.configure")
-      .then(isFresh => {
+      .executeCommand("mesonbuild.configure")
+      .then(() => {
         explorer.refresh();
       });
   else {
     vscode.window
       .showInformationMessage(
         "Meson project detected, would you like VS Code to configure it?",
-        "No",
+        "Never",
+        "Not this time",
         "This workspace",
         "Yes"
       )
@@ -208,14 +191,14 @@ export function activate(ctx: vscode.ExtensionContext): void {
               vscode.ConfigurationTarget.Workspace
             );
             break;
-          default:
+          case "Never":
             extensionConfigurationSet(
               "configureOnOpen",
               false,
               vscode.ConfigurationTarget.Global
             );
         }
-        if (response !== "No") {
+        if (arrayIncludes(["Yes", "This workspace"], response)) {
           vscode.commands
             .executeCommand("mesonbuild.configure")
             .then(() => explorer.refresh());

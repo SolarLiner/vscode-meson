@@ -8,7 +8,8 @@ import { TaskExecution, TaskRevealKind, ShellExecution, ShellExecutionOptions } 
 export async function checkMesonIsConfigured(dir: string) {
   return (await Promise.all([
     existsP(join(dir, "meson-info")),
-    existsP(join(dir, "meson-private"))
+    existsP(join(dir, "meson-private")),
+    existsP(join(dir, "build.ninja"))
   ])).every(v => v);
 }
 

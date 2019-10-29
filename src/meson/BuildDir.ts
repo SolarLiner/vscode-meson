@@ -3,15 +3,17 @@ import { promisify } from "util";
 import * as vscode from "vscode";
 import { checkMesonIsConfigured, runMeson, runNinja, runNinjaTask } from "./utils";
 import { join, resolve } from "path";
-import { extensionConfiguration, exec, getOutputChannel, execStream, execAsTask } from "../utils";
-import { Target, ProjectInfo, BuildOption, BuildOptions, Dependencies, Tests } from "./types";
+import { extensionConfiguration, getOutputChannel, execStream } from "../utils";
+import { Target, ProjectInfo, BuildOptions, Dependencies, Tests } from "./types";
+import MesonBuildTarget from "./BuildTarget";
+import MesonBuildTest from "./BuildTest";
 
 const exists = promisify(_exists);
 const readFile = promisify(_readFile)
 
-export default class MesonBuildTarget {
-  private buildDir: string;
-  private sourceDir: string;
+export default class MesonBuildDir {
+  public readonly buildDir: string;
+  public readonly sourceDir: string;
 
   constructor(sourceDir: string, buildDir: string) {
     this.buildDir = resolve(buildDir);
@@ -23,7 +25,7 @@ export default class MesonBuildTarget {
   }
 
   public async configure(): Promise<void> {
-    if (this.isConfigured()) {
+    if (await this.isConfigured()) {
       return this.reconfigure();
     }
     return vscode.window.withProgress({
@@ -61,7 +63,7 @@ export default class MesonBuildTarget {
   }
 
   public async build(target = "all") {
-    const stream = execStream(extensionConfiguration("ninjaPath"), { cwd: this.buildDir });
+    const stream = execStream([extensionConfiguration("ninjaPath"), target], { cwd: this.buildDir });
 
     return vscode.window.withProgress({
       title: target === "all" ? "Building project" : `Building ${target}`,
@@ -103,13 +105,10 @@ export default class MesonBuildTarget {
     }
   }
 
-  public async getTargets(): Promise<Target[]> {
-    return this.getIntrospection<Target[]>("targets");
-  }
-
   public async getProjectInfo(): Promise<ProjectInfo> {
     return this.getIntrospection<ProjectInfo>("projectinfo");
   }
+
 
   public async getBuildOptions(): Promise<BuildOptions> {
     return this.getIntrospection<BuildOptions>("buildoptions");
@@ -119,17 +118,24 @@ export default class MesonBuildTarget {
     return this.getIntrospection<Dependencies>("dependencies");
   }
 
-  public async getTests(): Promise<Tests> {
-    return this.getIntrospection<Tests>("tests");
+  public async getTargets(): Promise<MesonBuildTarget[]> {
+    const tgts = await this.getIntrospection<Target[]>("targets");
+    return tgts.map(t => new MesonBuildTarget(this, t));
   }
 
-  public async getBenchmarks(): Promise<Tests> {
-    return this.getIntrospection<Tests>("benchmarks");
+  public async getTests(): Promise<MesonBuildTest[]> {
+    const tests = await this.getIntrospection<Tests>("tests");
+    return tests.map(t => new MesonBuildTest(this, t));
+  }
+
+  public async getBenchmarks(): Promise<MesonBuildTest[]> {
+    const benches = await this.getIntrospection<Tests>("benchmarks");
+    return benches.map(b => new MesonBuildTest(this, b));
   }
 
   private async getIntrospection<K>(name: string): Promise<K | null> {
     if (!this.isConfigured()) return null;
-    const fullPath = join(this.buildDir, `intro-${name == "project-info" ? "projectinfo" : name}.json`);
+    const fullPath = join(this.buildDir, "meson-info", `intro-${name == "project-info" ? "projectinfo" : name}.json`);
     if (await exists(fullPath)) {
       const b = await readFile(fullPath);
       return JSON.parse(b.toString());
