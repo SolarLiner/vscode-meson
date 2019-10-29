@@ -4,18 +4,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as cp from "child_process";
 import * as vscode from "vscode";
+import { promisify } from "util";
 import { randomBytes, createHash, BinaryLike } from "crypto";
 import { Target } from "./meson/types";
 import { ExtensionConfiguration } from "./types";
 import { getMesonBuildOptions } from "./meson/introspection";
 
-export function exists(file: string): Promise<boolean> {
-  return new Promise<boolean>((resolve, _reject) => {
-    fs.exists(file, value => {
-      resolve(value);
-    });
-  });
-}
+export const exists = promisify(fs.exists);
 
 export function exec(
   command: string,

@@ -77,6 +77,14 @@
             "--layout=flat"
           ],
           "description": "Specify the list of configuration options used for Meson configuration."
+        },
+        "mesonbuild.mesonPath": {
+          "type": "string",
+          "default": "meson"
+        },
+        "mesonbuild.ninjaPath": {
+          "type": "string",
+          "default": "ninja"
         }
       }
     },
