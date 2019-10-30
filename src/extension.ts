@@ -42,7 +42,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
     },
     debug: {
       command: extensionConfiguration("mesonPath"),
-      args: ["lsp", "--debug"],
+      args: [],
       transport: vscodeLSP.TransportKind.stdio
     }
   };
@@ -61,7 +61,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
       },
       closed() {
         getOutputChannel().appendLine("[LSP INFO] Server closed.");
-        return vscodeLSP.CloseAction.DoNotRestart;
+        return vscodeLSP.CloseAction.Restart;
       }
     }
   };
@@ -185,7 +185,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
                 label: t.name,
                 detail: `Test timeout: ${t.timeout}s, ${
                   t.is_parallel ? "Run in parallel" : "Run serially"
-                }`,
+                  }`,
                 description: t.suite.join(","),
                 picked: false
               })),
@@ -193,7 +193,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
                 label: b.name,
                 detail: `Benchmark timeout: ${
                   b.timeout
-                }s, benchmarks always run serially`,
+                  }s, benchmarks always run serially`,
                 description: b.suite.join(","),
                 picked: false
               }))
